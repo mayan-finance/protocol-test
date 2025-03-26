@@ -118,16 +118,30 @@ async fn main() -> anyhow::Result<()> {
         circle_message_v2.attestation
     );
 
-    let tx = hub
-        .processFastMCTPIncoming(
-            hub_payload,
-            circle_message_v2.message.unwrap(),
-            circle_message_v2.attestation.unwrap(),
-        )
-        .send()
-        .await?;
-    let receipt = tx.watch().await?;
-    println!("Hub Process FastMCTPIncoming Receipt: {:?}", receipt);
+    let rescue = true;
+    if !rescue {
+        let tx = hub
+            .processFastMCTPIncoming(
+                hub_payload,
+                circle_message_v2.message.unwrap(),
+                circle_message_v2.attestation.unwrap(),
+            )
+            .send()
+            .await?;
+        let receipt = tx.watch().await?;
+        println!("Hub Process FastMCTPIncoming Receipt: {:?}", receipt);
+    } else {
+        let tx = hub
+            .rescueFastMCTP(
+                hub_payload,
+                circle_message_v2.message.unwrap(),
+                circle_message_v2.attestation.unwrap(),
+            )
+            .send()
+            .await?;
+        let receipt = tx.watch().await?;
+        println!("Hub Rescue FastMCTP Receipt: {:?}", receipt);
+    }
 
     Ok(())
 }
