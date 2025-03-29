@@ -83,6 +83,7 @@ async fn mayan_circle_test(rescue: bool) -> anyhow::Result<()> {
         pol_usdc_address,
         mayan_circle_address,
         value,
+        120,
     )
     .await?;
     println!("Increased allowance: {:?}", tx);
@@ -225,6 +226,7 @@ async fn fast_mctp_test(rescue: bool) -> anyhow::Result<()> {
         base_usdc_address,
         fast_mctp_address,
         value,
+        120,
     )
     .await?;
     println!("Increased allowance: {:?}", tx);

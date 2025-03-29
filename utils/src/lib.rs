@@ -14,19 +14,18 @@ pub mod web3 {
 
     use alloy::{
         network::EthereumWallet,
-        primitives::{Address, FixedBytes, U256},
+        primitives::{Address, FixedBytes, TxHash, U256},
         providers::{
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
                 WalletFiller,
-            },
-            ProviderBuilder, RootProvider,
+            }, Provider, ProviderBuilder, RootProvider
         },
         signers::local::PrivateKeySigner,
         sol,
     };
 
-    pub type Provider<'a> = FillProvider<
+    pub type Web3Provider<'a> = FillProvider<
         JoinFill<
             JoinFill<
                 alloy::providers::Identity,
@@ -47,7 +46,7 @@ pub mod web3 {
     pub fn get_provider<'a, 'b>(
         wallet: &'a EthereumWallet,
         rpc_url: &'b str,
-    ) -> anyhow::Result<Provider<'a>> {
+    ) -> anyhow::Result<Web3Provider<'a>> {
         let provider = ProviderBuilder::new()
             .wallet(wallet)
             .on_http(rpc_url.parse()?);
@@ -55,16 +54,36 @@ pub mod web3 {
     }
 
     pub async fn increase_allowence<'a>(
-        provider: &Provider<'a>,
+        provider: &Web3Provider<'a>,
         token_address: Address,
         spender: Address,
         amount: U256,
+        timeout_seconds: u64,
     ) -> anyhow::Result<FixedBytes<32>> {
-        let token = IERC20::new(token_address, provider);
+        let token = IERC20::new(token_address, provider.clone());
 
         let tx = token.approve(spender, amount).send().await?;
-        let receipt = tx.watch().await?;
-        Ok(receipt)
+        let hash = tx.tx_hash();
+        let tx_hash = TxHash::from_str(&tx.tx_hash().to_string())?;
+        let start_time = std::time::Instant::now();
+
+        let mut sleep_time = 1;
+        loop {
+            let receipt = provider.get_transaction_receipt(tx_hash).await?;
+            if receipt.is_some() {
+                return Ok(hash.clone());
+            }
+            if start_time.elapsed() > std::time::Duration::from_secs(timeout_seconds) {
+                return Err(anyhow::anyhow!("Timeout"));
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(sleep_time)).await;
+            sleep_time *= 2;
+
+            if sleep_time > 60 {
+                sleep_time = 60;
+            }
+        }
     }
 }
 
