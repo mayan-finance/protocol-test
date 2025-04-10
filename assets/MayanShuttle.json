@@ -129,7 +129,7 @@
             {
                 "name": "orderPayload",
                 "type": "tuple",
-                "internalType": "struct MayanSwapLayer.OrderPayload",
+                "internalType": "struct MayanShuttle.OrderPayload",
                 "components": [
                     {
                         "name": "payloadType",
