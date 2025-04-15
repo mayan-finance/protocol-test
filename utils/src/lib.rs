@@ -242,8 +242,59 @@ pub mod wormhole {
     }
 
     #[derive(Debug, Clone, Deserialize)]
+    pub struct WormholeVaaSequenceResponse {
+        pub data: WormholeVaa,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
     pub struct WormholeVaa {
         pub vaa: Option<String>, // base64 encoded
+
+        #[serde(rename = "txHash")]
+        pub tx_hash: String,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct Sequence {
+        pub sequence: u64,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct SequenceResponse {
+        pub data: Vec<Sequence>,
+    }
+
+    pub async fn get_latest_sequence(domain_id: u64, emitter_address: String) -> anyhow::Result<u64> {
+        let url = format!(
+            "https://api.wormholescan.io/api/v1/vaas/{}/{}/",
+            domain_id, emitter_address
+        );
+        let response = reqwest::get(url).await?;
+        let body = response.text().await?;
+        let sequence_response: SequenceResponse = serde_json::from_str(&body)?;
+        if sequence_response.data.is_empty() {
+            return Err(anyhow::anyhow!("No sequences found"));
+        }
+        Ok(sequence_response.data[0].sequence)
+    }
+
+    pub async fn get_vaa_by_sequence(domain_id: u64, emitter_address: String, sequence: u64) -> anyhow::Result<(Bytes, String)> {
+        let url = format!(
+            "https://api.wormholescan.io/api/v1/vaas/{}/{}/{}/",
+            domain_id, emitter_address, sequence
+        );
+        let response = reqwest::get(url).await?;
+        let body = response.text().await?;
+        let wormhole_vaa_sequence_response: WormholeVaaSequenceResponse = serde_json::from_str(&body)?;
+        let vaa_base64 = match &wormhole_vaa_sequence_response.data.vaa {
+            Some(vaa) => vaa,
+            None => return Err(anyhow::anyhow!("Vaa is not returned")),
+        };
+        if vaa_base64.is_empty() {
+            return Err(anyhow::anyhow!("Vaa is empty"));
+        }
+        let vaa = base64::decode(&vaa_base64)?;
+        Ok((vaa.try_into()?, wormhole_vaa_sequence_response.data.tx_hash.clone()))
     }
 
     pub async fn get_vaa(tx_hash: String, timeout_seconds: u64) -> anyhow::Result<Bytes> {

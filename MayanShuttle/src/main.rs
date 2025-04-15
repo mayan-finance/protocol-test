@@ -6,9 +6,9 @@ use utils::{
         providers::Provider,
         sol,
     },
-    circle::get_circle_message_v1,
+    circle::{get_circle_message_v1, get_circle_message_v2},
     web3::{get_provider, get_wallet, increase_allowence},
-    wormhole::get_vaa,
+    wormhole::{get_latest_sequence, get_vaa, get_vaa_by_sequence},
     *,
 };
 use ITokenRouter::OrderResponse;
@@ -45,16 +45,6 @@ sol!(
 enum Opt {
     #[structopt(name = "bridge")]
     Bridge,
-
-    #[structopt(name = "redeem")]
-    Redeem {
-        #[structopt(short, long)]
-        encoded_vm: String,
-        #[structopt(short, long)]
-        cctp_message: String,
-        #[structopt(short, long)]
-        cctp_sender: String,
-    },
 }
 
 #[tokio::main]
@@ -70,10 +60,12 @@ async fn main() -> anyhow::Result<()> {
 
             let avalanche_provider =
                 utils::web3::get_provider(&wallet, "https://avalanche.drpc.org")?;
+            let base_provider = utils::web3::get_provider(&wallet, "https://base.llamarpc.com")?;
 
             println!(
-                "Avalanche Latest Block: {:?}",
-                avalanche_provider.get_block_number().await?
+                "Avalanche Latest Block: {:?}\nBase Latest Block: {:?}",
+                avalanche_provider.get_block_number().await?,
+                base_provider.get_block_number().await?
             );
 
             let mayan_shuttle_address = address!("0x0e689e83E1337037D9bF3A8691A06BD308c78484");
@@ -83,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Local Token: {:?}", local_token);
             println!("MayanShuttle Address: {:?}", mayan_shuttle_address);
 
+            // Minimum eligible value to bridge
             let value_u64 = 100000000;
             let value = U256::from(value_u64);
             let tx = utils::web3::increase_allowence(
@@ -94,6 +87,12 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("Increased allowance: {:?}", tx);
+
+            let matching_engine_address =
+                "74e70ed52464f997369bbefd141d8a2d9dd3cd15e1f21b37bce18f45e0e923b2";
+            let mut latest_sequence =
+                get_latest_sequence(1, matching_engine_address.to_string()).await?;
+            println!("Latest Sequence: {:?}", latest_sequence);
 
             let tx = mayan_shuttle
                 .bridge(
@@ -113,25 +112,33 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             let receipt = tx.watch().await?;
             println!("MayanShuttle Bridge Receipt: {:?}", receipt);
-        }
-        Opt::Redeem {
-            encoded_vm,
-            cctp_message,
-            cctp_sender,
-        } => {
-            let (address, wallet) = utils::web3::get_wallet()?;
-            println!("Wallet Address: {}", address);
 
-            let base_provider = utils::web3::get_provider(&wallet, "https://base.drpc.org")?;
+            // Because rate of usage of protocol is low this solution works now
+            loop {
+                let new_seq = get_latest_sequence(1, matching_engine_address.to_string()).await?;
+                if new_seq > latest_sequence {
+                    latest_sequence = new_seq;
+                    println!("New Sequence: {:?}", latest_sequence);
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            let (vaa, tx_hash) =
+                get_vaa_by_sequence(1, matching_engine_address.to_string(), latest_sequence)
+                    .await?;
+            println!("VAA: {:?}", vaa);
+            println!("Tx Hash: {:?}", tx_hash);
 
+            let circle_message_v2 = get_circle_message_v2(5, tx_hash, 120).await?;
+            println!("Circle Message V2: {:?}", circle_message_v2);
             let mayan_shuttle_address = address!("0x36a79a04fbeec88476c7aa0270137f135dc8361c");
             let mayan_shuttle = MayanShuttle::new(mayan_shuttle_address, base_provider.clone());
 
             let tx = mayan_shuttle
                 .redeem(
-                    Bytes::from_hex(encoded_vm.trim_start_matches("0x"))?,
-                    Bytes::from_hex(cctp_message.trim_start_matches("0x"))?,
-                    Bytes::from_hex(cctp_sender.trim_start_matches("0x"))?,
+                    vaa,
+                    circle_message_v2.message.unwrap(),
+                    circle_message_v2.attestation.unwrap(),
                 )
                 .send()
                 .await?;
