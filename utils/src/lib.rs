@@ -278,14 +278,33 @@ pub mod wormhole {
         Ok(sequence_response.data[0].sequence)
     }
 
-    pub async fn get_vaa_by_sequence(domain_id: u64, emitter_address: String, sequence: u64) -> anyhow::Result<(Bytes, String)> {
+    pub async fn get_vaa_by_sequence(domain_id: u64, emitter_address: String, sequence: u64, num_retries: u64) -> anyhow::Result<(Bytes, String)> {
         let url = format!(
             "https://api.wormholescan.io/api/v1/vaas/{}/{}/{}/",
             domain_id, emitter_address, sequence
         );
-        let response = reqwest::get(url).await?;
-        let body = response.text().await?;
-        let wormhole_vaa_sequence_response: WormholeVaaSequenceResponse = serde_json::from_str(&body)?;
+        let mut retries = 0;
+        let wormhole_vaa_sequence_response: WormholeVaaSequenceResponse;
+        loop {
+            let response = reqwest::get(url.clone()).await?;
+            let body = response.text().await?;
+            match serde_json::from_str(&body) {
+                Ok(vaa_sequence_response) => {
+                    wormhole_vaa_sequence_response = vaa_sequence_response;
+                    break;
+                },
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                    retries += 1;
+                }
+            };
+
+            if retries >= num_retries {
+                return Err(anyhow::anyhow!("Failed to get VAAs"));
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
         let vaa_base64 = match &wormhole_vaa_sequence_response.data.vaa {
             Some(vaa) => vaa,
             None => return Err(anyhow::anyhow!("Vaa is not returned")),

@@ -41,55 +41,64 @@ sol!(
     "../assets/IWormhole.json"
 );
 
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    TestSwapProtocol,
+    "../assets/TestSwapProtocol.json"
+);
+
 #[derive(Debug, Clone, StructOpt)]
 enum Opt {
     #[structopt(name = "bridge")]
     Bridge,
+
+    #[structopt(name = "swap")]
+    Swap,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
 
+    let (address, wallet) = utils::web3::get_wallet()?;
+    println!("Wallet Address: {}", address);
+    let mut bytes_address = [0u8; 32];
+    bytes_address[12..].copy_from_slice(address.as_slice());
+
+    let avalanche_provider = utils::web3::get_provider(&wallet, "https://avalanche.drpc.org")?;
+    let base_provider = utils::web3::get_provider(&wallet, "https://base.llamarpc.com")?;
+
+    println!(
+        "Avalanche Latest Block: {:?}\nBase Latest Block: {:?}",
+        avalanche_provider.get_block_number().await?,
+        base_provider.get_block_number().await?
+    );
+
+    let mayan_shuttle_address = address!("0x0e689e83E1337037D9bF3A8691A06BD308c78484");
+    let mayan_shuttle = MayanShuttle::new(mayan_shuttle_address, avalanche_provider.clone());
+    let local_token = mayan_shuttle.localToken().call().await?._0;
+    println!("Local Token: {:?}", local_token);
+    println!("MayanShuttle Address: {:?}", mayan_shuttle_address);
+
+    // Minimum eligible value to bridge
+    let value_u64 = 100000000;
+    let value = U256::from(value_u64);
+    let tx = utils::web3::increase_allowence(
+        &avalanche_provider,
+        local_token,
+        mayan_shuttle_address,
+        value,
+        120,
+    )
+    .await?;
+    println!("Increased allowance: {:?}", tx);
+
+    let matching_engine_address =
+        "74e70ed52464f997369bbefd141d8a2d9dd3cd15e1f21b37bce18f45e0e923b2";
+
     match opt {
         Opt::Bridge => {
-            let (address, wallet) = utils::web3::get_wallet()?;
-            println!("Wallet Address: {}", address);
-            let mut bytes_address = [0u8; 32];
-            bytes_address[12..].copy_from_slice(address.as_slice());
-
-            let avalanche_provider =
-                utils::web3::get_provider(&wallet, "https://avalanche.drpc.org")?;
-            let base_provider = utils::web3::get_provider(&wallet, "https://base.llamarpc.com")?;
-
-            println!(
-                "Avalanche Latest Block: {:?}\nBase Latest Block: {:?}",
-                avalanche_provider.get_block_number().await?,
-                base_provider.get_block_number().await?
-            );
-
-            let mayan_shuttle_address = address!("0x0e689e83E1337037D9bF3A8691A06BD308c78484");
-            let mayan_shuttle =
-                MayanShuttle::new(mayan_shuttle_address, avalanche_provider.clone());
-            let local_token = mayan_shuttle.localToken().call().await?._0;
-            println!("Local Token: {:?}", local_token);
-            println!("MayanShuttle Address: {:?}", mayan_shuttle_address);
-
-            // Minimum eligible value to bridge
-            let value_u64 = 100000000;
-            let value = U256::from(value_u64);
-            let tx = utils::web3::increase_allowence(
-                &avalanche_provider,
-                local_token,
-                mayan_shuttle_address,
-                value,
-                120,
-            )
-            .await?;
-            println!("Increased allowance: {:?}", tx);
-
-            let matching_engine_address =
-                "74e70ed52464f997369bbefd141d8a2d9dd3cd15e1f21b37bce18f45e0e923b2";
             let mut latest_sequence =
                 get_latest_sequence(1, matching_engine_address.to_string()).await?;
             println!("Latest Sequence: {:?}", latest_sequence);
@@ -124,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
             let (vaa, tx_hash) =
-                get_vaa_by_sequence(1, matching_engine_address.to_string(), latest_sequence)
+                get_vaa_by_sequence(1, matching_engine_address.to_string(), latest_sequence, 10)
                     .await?;
             println!("VAA: {:?}", vaa);
             println!("Tx Hash: {:?}", tx_hash);
@@ -144,6 +153,9 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             let receipt = tx.watch().await?;
             println!("MayanShuttle Redeem Receipt: {:?}", receipt);
+        }
+        Opt::Swap => {
+            println!("Wallet Address: {}", address);
         }
     }
     Ok(())
