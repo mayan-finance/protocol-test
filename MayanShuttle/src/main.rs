@@ -12,6 +12,7 @@ use utils::{
     *,
 };
 use ITokenRouter::OrderResponse;
+use MayanShuttle::OrderPayload;
 
 sol!(
     #[allow(missing_docs)]
@@ -155,7 +156,85 @@ async fn main() -> anyhow::Result<()> {
             println!("MayanShuttle Redeem Receipt: {:?}", receipt);
         }
         Opt::Swap => {
-            println!("Wallet Address: {}", address);
+            let mut latest_sequence =
+                get_latest_sequence(1, matching_engine_address.to_string()).await?;
+            println!("Latest Sequence: {:?}", latest_sequence);
+
+            let token_out_address = address!("0x3bC4CCc525cBf4902125C4707d0cb172327348d9");
+            let mut token_out_bytes = [0u8; 32];
+            token_out_bytes[12..].copy_from_slice(token_out_address.as_slice());
+
+            let tx = mayan_shuttle
+                .createOrder(
+                    value_u64,
+                    30,
+                    100000,
+                    1753285701,
+                    OrderPayload {
+                        deadline: 1753285701,
+                        gasDrop: 0,
+                        redeemFee: 0,
+                        refundFee: 0,
+                        payloadType: 3,
+                        destAddr: bytes_address.try_into()?,
+                        referrerBps: 0,
+                        referrerAddr: bytes_address.try_into()?,
+                        tokenOut: token_out_bytes.try_into()?,
+                        amountOutMin: 2,
+                    }
+                )
+                .send()
+                .await?;
+            let receipt = tx.watch().await?;
+            println!("MayanShuttle Create Order Receipt: {:?}", receipt);
+
+            loop {
+                let new_seq = get_latest_sequence(1, matching_engine_address.to_string()).await?;
+                if new_seq > latest_sequence {
+                    latest_sequence = new_seq;
+                    println!("New Sequence: {:?}", latest_sequence);
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            let (vaa, tx_hash) =
+                get_vaa_by_sequence(1, matching_engine_address.to_string(), latest_sequence, 10)
+                    .await?;
+            println!("VAA: {:?}", vaa);
+            println!("Tx Hash: {:?}", tx_hash);
+
+            let circle_message_v2 = get_circle_message_v2(5, tx_hash, 120).await?;
+            println!("Circle Message V2: {:?}", circle_message_v2);
+            let mayan_shuttle_address = address!("0x36a79a04fbeec88476c7aa0270137f135dc8361c");
+            let mayan_shuttle = MayanShuttle::new(mayan_shuttle_address, base_provider.clone());
+            let base_local_token = mayan_shuttle.localToken().call().await?._0;
+            println!("Base Local Token: {:?}", base_local_token);
+            
+            let swap_protocol_address = token_out_address.clone();
+            let swap_protocol = TestSwapProtocol::new(swap_protocol_address, base_provider.clone());
+            let num_decimals = swap_protocol.decimals().call().await?._0;
+            let calldata = swap_protocol.swap(
+                base_local_token,
+                U256::from(value_u64 - 123456),
+                U256::from(21) * U256::from(10).pow(U256::from(num_decimals)),
+            ).calldata().clone();
+
+            let tx = mayan_shuttle.fulfillOrder(
+                vaa,
+                circle_message_v2.message.unwrap(),
+                circle_message_v2.attestation.unwrap(),
+                swap_protocol_address,
+                calldata,
+            ).send().await?;
+            let receipt = tx.watch().await?;
+            println!("MayanShuttle Fulfill Order Receipt: {:?}", receipt);
+
+            // refund tokens back to account from test swap protocol
+            let tx = swap_protocol.rescueToken(
+                base_local_token,
+            ).send().await?;
+            let receipt = tx.watch().await?;
+            println!("Swap Protocol Rescue Token Receipt: {:?}", receipt);
         }
     }
     Ok(())
